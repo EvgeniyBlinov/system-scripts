@@ -12,6 +12,13 @@ cd /usr/local/share/system-scripts &&
 ln -s /usr/local/share/system-scripts/bin/* /usr/local/bin/
 ```
 
+## Usage
+
+```sh
+grep 'export\s*HOTSPOT_WIFI_SSID' ~/.profile || echo "export HOTSPOT_WIFI_SSID='myhotspot'" >> ~/.profile
+grep 'export\s*HOTSPOT_WIFI_PASSWORD' ~/.profile || echo "export HOTSPOT_WIFI_PASSWORD='8RCiVfRQcM'" >> ~/.profile
+```
+
 ## License
 
 [![MIT License][license-image]][license-url]
