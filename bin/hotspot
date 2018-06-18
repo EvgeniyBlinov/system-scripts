@@ -1,0 +1,231 @@
+#!/bin/bash
+
+########################################################################
+# Requirements
+# apt install hostapd dnsmasq
+########################################################################
+
+########################################################################
+# Set default variables
+########################################################################
+[ -z "$HOTSPOT_INET" ]               && export HOTSPOT_INET="$(ip route get 1 |awk '{printf $5}')"
+[ -z "$HOTSPOT_ILAN" ]               && export HOTSPOT_ILAN='wlan0'
+[ -z "$HOTSPOT_ILAN_IP" ]            && export HOTSPOT_ILAN_IP='10.10.0.1'
+[ -z "$HOTSPOT_ACTION" ]             && export HOTSPOT_ACTION='status'
+[ -z "$HOTSPOT_RESET_WIFI_MODULES" ] && export HOTSPOT_RESET_WIFI_MODULES=0
+[ -z "$HOTSPOT_WIFI_DRIVER" ]        && export HOTSPOT_WIFI_DRIVER='ath9k'
+# PRIVATE
+[ -z "$HOTSPOT_WIFI_SSID" ]          && export HOTSPOT_WIFI_SSID='HOTSPOT'
+[ -z "$HOTSPOT_WIFI_PASSWORD" ]      && export HOTSPOT_WIFI_PASSWORD='SgX1ipurB3'
+########################################################################
+
+function usage {
+    echo "Usage: ${0##*/} [-h?vri:w:]"
+cat<<EOF
+arguments:
+    -h      - help
+    -i      - input device (default ip route get 1 |awk '{printf \$5}')
+    -w      - wlan device  (ifconfig -a)
+    -s      - hotspot SSID name
+    -p      - hotspot password
+    -r      - reset wifi modules
+depends:
+    apt-get install dnsmasq hostapd
+EOF
+    [ -z "$1" ] && return 100 ||
+    exit "$1"
+}
+########################################################################
+while getopts ":?hrw:i:s:p:" opt; do
+    case "$opt" in
+    \?|h) usage 100                           ;;
+    w) export HOTSPOT_ILAN="$OPTARG"          ;;
+    i) export HOTSPOT_INET="$OPTARG"          ;;
+    s) export HOTSPOT_WIFI_SSID="$OPTARG"     ;;
+    p) export HOTSPOT_WIFI_PASSWORD="$OPTARG" ;;
+    r) export HOTSPOT_RESET_WIFI_MODULES=1    ;;
+    #v) VERBOSE=1                              ;;
+    #d) MODE=3                                 ;;
+    #f)  FILE_NAME=$OPTARG ;;
+    esac
+done
+
+shift $((OPTIND-1))
+
+[ "$1" = "--" ] && shift
+
+## parse HOTSPOT_ACTION
+case "$*" in
+    *up*)     export HOTSPOT_ACTION='up'     ;;
+    *down*)   export HOTSPOT_ACTION='down'   ;;
+    *status*) export HOTSPOT_ACTION='status' ;;
+esac
+
+## varibles validation
+if [ -z "$HOTSPOT_INET" ]; then
+    echo "Error: input device ${HOTSPOT_INET} is empty"
+    usage 1
+fi
+if [ "$HOTSPOT_INET" == "$HOTSPOT_ILAN" ]; then
+    echo "Error: input device ${HOTSPOT_INET} == wlan device ${HOTSPOT_ILAN}"
+    usage 2
+fi
+
+########################################################################
+### Debug
+#echo "HOTSPOT_INET=$HOTSPOT_INET"
+#echo "HOTSPOT_ILAN=$HOTSPOT_ILAN"
+#echo "HOTSPOT_ILAN_IP=$HOTSPOT_ILAN_IP"
+#echo "HOTSPOT_ACTION=$HOTSPOT_ACTION"
+#echo "HOTSPOT_RESET_WIFI_MODULES=$HOTSPOT_RESET_WIFI_MODULES"
+#echo "HOTSPOT_WIFI_DRIVER=$HOTSPOT_WIFI_DRIVER"
+
+#exit 0
+########################################################################
+
+if [ ! -h /dev/random.old ]; then
+    echo "Move random"
+	mv /dev/random /dev/random.old
+	ln -s /dev/urandom /dev/random
+fi
+
+
+if [ 1 == "$HOTSPOT_RESET_WIFI_MODULES" ]; then
+    echo "Reset ${HOTSPOT_WIFI_DRIVER} kernel modules"
+    rmmod ${HOTSPOT_WIFI_DRIVER}
+    sleep 2
+    modprobe ${HOTSPOT_WIFI_DRIVER}
+    sleep 2
+    rfkill block all
+    rfkill unblock all
+fi
+
+#configure
+function downWlan {
+    echo "Down ${HOTSPOT_ILAN}"
+    #ifconfig $HOTSPOT_INET down &&
+    ifconfig $HOTSPOT_ILAN down &&
+    systemctl stop dnsmasq &&
+    killall hostapd 2>/dev/null
+    #if [ -x '/usr/scripts/firewall' ]; then
+        #/usr/scripts/firewall -i "${HOTSPOT_INET}" -l "${HOTSPOT_ILAN}" -a 'all_accept'
+    #else
+        #echo "1" > /proc/sys/net/ipv4/ip_forward
+        #iptables -t nat -A POSTROUTING -o "$HOTSPOT_INET" -j MASQUERADE
+        #iptables -A FORWARD -m conntrack --ctstate RELATED,ESTABLISHED -j ACCEPT
+        #iptables -A FORWARD -i "$HOTSPOT_ILAN" -o "$HOTSPOT_INET" -j ACCEPT
+    #fi
+}
+
+function upWlan {
+    echo "Up ${HOTSPOT_ILAN} on ${HOTSPOT_ILAN_IP}"
+    echo "Make /etc/dnsmasq.conf"
+cat > /etc/dnsmasq.conf <<EOF
+interface=${HOTSPOT_ILAN}
+except-interface=${HOTSPOT_INET}
+dhcp-range=${HOTSPOT_ILAN_IP%.*}.2,${HOTSPOT_ILAN_IP%.*}.50,12h
+#Note: One may want to setup DHCP reservations to bind a MAC address to a specific IP address (in the case of servers or clients you want to remote into by IP address) by adding to this file:
+#dhcp-host:XX:XX:XX:XX:XX,${HOTSPOT_ILAN_IP%.*}.Z
+dhcp-option=3,${HOTSPOT_ILAN_IP}
+EOF
+    ifconfig "$HOTSPOT_ILAN" "$HOTSPOT_ILAN_IP" up &&
+    systemctl start dnsmasq &&
+    echo "Run hostapd..." &&
+    echo "Make /etc/hostapd/hostapd.conf"
+cat >  /etc/hostapd/hostapd.conf <<EOF
+#########################  SIMPLE  ######################################
+interface=${HOTSPOT_ILAN}
+driver=nl80211
+channel=3
+##hw_mode=b
+hw_mode=g
+wpa=2
+wpa_key_mgmt=WPA-PSK
+#------------------------------------------------------------------------
+ssid=${HOTSPOT_WIFI_SSID}
+wpa_passphrase=${HOTSPOT_WIFI_PASSWORD}
+#########################  SIMPLE  ######################################
+country_code=US
+#country_code=RU
+auth_algs=1
+beacon_int=50
+disassoc_low_ack=1
+
+## unknown
+#ht_capab=[HT40+][HT40-][SHORT-GI-40][RX-STBC1]
+ieee80211d=1
+ieee80211n=1
+require_ht=0
+wmm_enabled=1
+ctrl_interface=/var/run/hostapd
+ctrl_interface_group=0
+ignore_broadcast_ssid=0
+macaddr_acl=0
+EOF
+    hostapd -dd -B /etc/hostapd/hostapd.conf &&
+    (
+    echo "Run firewall..."
+    # @TODO use all rules
+    if [ -x '/usr/scripts/firewall' ]; then
+        /usr/scripts/firewall -i "${HOTSPOT_INET}" -l "${HOTSPOT_ILAN}" -a 'all_accept forward'
+        iptables -t nat -A POSTROUTING --src ${HOTSPOT_ILAN_IP%.*}.0/24 -o $(ip route get 1 |awk '{printf $5}') -j MASQUERADE 
+    else
+        echo "1" > /proc/sys/net/ipv4/ip_forward
+        iptables -t nat -A POSTROUTING --src ${HOTSPOT_ILAN_IP%.*}.0/24 -o $(ip route get 1 |awk '{printf $5}') -j MASQUERADE 
+        iptables -t nat -A POSTROUTING -o "$HOTSPOT_INET" -j MASQUERADE
+        iptables -A FORWARD -m conntrack --ctstate RELATED,ESTABLISHED -j ACCEPT
+        iptables -A FORWARD -i "$HOTSPOT_ILAN" -o "$HOTSPOT_INET" -j ACCEPT
+        ### For VPN
+        iptables -t nat -A POSTROUTING -o tun0 -j MASQUERADE
+    fi
+    )
+}
+
+function hotspot_status {
+    echo '########################################################################'
+    echo "Dump varibles"
+    echo '########################################################################'
+    echo "HOTSPOT_INET=$HOTSPOT_INET"
+    echo "HOTSPOT_ILAN=$HOTSPOT_ILAN"
+    echo "HOTSPOT_ILAN_IP=$HOTSPOT_ILAN_IP"
+    echo "HOTSPOT_ACTION=$HOTSPOT_ACTION"
+    echo "HOTSPOT_RESET_WIFI_MODULES=$HOTSPOT_RESET_WIFI_MODULES"
+    echo "HOTSPOT_WIFI_DRIVER=$HOTSPOT_WIFI_DRIVER"
+    echo '########################################################################'
+    echo "cat /etc/hostapd/hostapd.conf|grep -v 'wpa_passphrase'"
+    echo '########################################################################'
+    cat /etc/hostapd/hostapd.conf|grep -v 'wpa_passphrase'
+    echo '########################################################################'
+    echo "cat /etc/dnsmasq.conf "
+    echo '########################################################################'
+    cat /etc/dnsmasq.conf
+    echo '########################################################################'
+    echo "ifconfig $HOTSPOT_INET"
+    echo '########################################################################'
+    ifconfig $HOTSPOT_INET
+    echo '########################################################################'
+    echo "ifconfig $HOTSPOT_ILAN"
+    echo '########################################################################'
+    ifconfig $HOTSPOT_ILAN
+    echo '########################################################################'
+    echo "cat /proc/sys/net/ipv4/ip_forward"
+    echo '########################################################################'
+    cat /proc/sys/net/ipv4/ip_forward
+}
+
+case "$HOTSPOT_ACTION" in
+    up) upWlan ;;
+    down) downWlan ;;
+    *)
+        usage
+        hotspot_status
+        exit 0
+        ;;
+esac
+
+# firewall
+#iptables -A INPUT -p tcp -m multiport -i wlan0 --dports 53 -j ACCEPT
+#iptables -A INPUT -p udp -m multiport -i wlan0 --dports 53 -j ACCEPT
+#iptables -A INPUT -p udp -m multiport -i wlan0 --dports 67 -j ACCEPT
+# iptables -A INPUT -p tcp -m multiport --dports 68 -j ACCEPT
+# iptables -A INPUT -p tcp -m multiport --dports 33191 -j ACCEPT
