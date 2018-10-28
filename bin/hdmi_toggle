@@ -1,0 +1,77 @@
+#!/usr/bin/env bash
+
+ACTION="$1"
+XRANDR_SCRIPT_NAME='bbk1.sh'
+
+function install_udev_rule {
+#KERNEL=="card0", SUBSYSTEM=="drm", ACTION=="change", RUN+="/usr/local/bin/hdmi_toggle"
+sudo cat > /etc/udev/rules.d/99-hdmi_sound.rules <<- 'EOF'
+KERNEL=="card0", SUBSYSTEM=="drm", ACTION=="change", RUN+="/bin/systemctl start hdmi_toggle.service"
+EOF
+}
+
+function uninstall_udev_rule {
+sudo rm /etc/udev/rules.d/99-hdmi_sound.rules
+}
+
+function install_systemd_unit {
+sudo cat > /etc/systemd/system/hdmi_toggle.service <<- 'EOF'
+[Unit]
+Description=hdmi hotplug
+
+[Service]
+Type=simple
+RemainAfterExit=no
+ExecStart=/usr/local/bin/hdmi_toggle
+
+[Install]
+WantedBy=multi-user.target
+EOF
+}
+
+function uninstall_systemd_unit {
+sudo rm /etc/systemd/system/hdmi_toggle.service
+}
+
+case "$ACTION" in
+    install)
+        sudo cp $0 /usr/local/bin/hdmi_toggle
+        install_udev_rule
+        install_systemd_unit
+        sudo udevadm control --reload-rules
+        sudo systemctl daemon-reload
+        exit 0
+        ;;
+    uninstall)
+        sudo rm /usr/local/bin/hdmi_toggle
+        uninstall_udev_rule
+        uninstall_systemd_unit
+        sudo udevadm control --reload-rules
+        sudo systemctl daemon-reload
+        exit 0
+        ;;
+    *);;
+esac
+
+# grab the display and xauthority cookie
+export DISPLAY=$(w -hs |awk '/\s:[0-9]+\s/ {print $3}')
+X_USER=$(w -hs |awk '/\s:[0-9]+\s/ {print $1}')
+## as root
+#export DISPLAY=$(w -hs | awk -v vt=tty$(fgconsole) '$0 ~ vt {print $3}')
+#X_USER=$(w -hs | awk -v vt=tty$(fgconsole) '$0 ~ vt {print $1}')
+export XAUTHORITY=/home/$X_USER/.Xauthority
+USER_ID=$(id -u "$X_USER")
+export PULSE_SERVER="unix:/run/user/"$USER_ID"/pulse/native"
+HDMI_STATUS=$(</sys/class/drm/card0/*HDMI*/status)
+
+export PULSE_SERVER="unix:/run/user/"$USER_ID"/pulse/native"
+
+if [[ $HDMI_STATUS == connected ]]; then
+    sudo -u "$X_USER" \
+        pactl --server "$PULSE_SERVER" set-card-profile 0 output:hdmi-stereo+input:analog-stereo
+    /bin/su $X_USER -c "/home/$X_USER/.screenlayout/$XRANDR_SCRIPT_NAME"
+else
+    sudo -u "$X_USER" \
+        pactl --server "$PULSE_SERVER" set-card-profile 0 output:analog-stereo+input:analog-stereo
+    /bin/su $X_USER -c '/usr/bin/xrandr --output HDMI1 --off'
+fi
