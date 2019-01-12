@@ -64,8 +64,6 @@ USER_ID=$(id -u "$X_USER")
 export PULSE_SERVER="unix:/run/user/"$USER_ID"/pulse/native"
 HDMI_STATUS=$(</sys/class/drm/card0/*HDMI*/status)
 
-export PULSE_SERVER="unix:/run/user/"$USER_ID"/pulse/native"
-
 if [[ $HDMI_STATUS == connected ]]; then
     sudo -u "$X_USER" \
         pactl --server "$PULSE_SERVER" set-card-profile 0 output:hdmi-stereo+input:analog-stereo
