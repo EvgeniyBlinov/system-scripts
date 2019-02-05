@@ -25,7 +25,7 @@ grep 'export\s*HOTSPOT_WIFI_PASSWORD' ~/.profile || echo "export HOTSPOT_WIFI_PA
 
 ## Author
 
-- [Blinov Evgeniy](mailto:evgeniy_blinov@mail.ru) ([http://blinov.in.ua/](http://blinov.in.ua/))
+- [Blinov Evgeniy](mailto:evgeniy_blinov@mail.ru) (<https://evgeniyblinov.ru>)
 
 [license-image]: http://img.shields.io/badge/license-MIT-blue.svg?style=flat
 [license-url]: LICENSE
