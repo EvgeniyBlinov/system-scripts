@@ -1,10 +1,65 @@
 #!/usr/bin/env bash
 
 ACTION="$1"
-XRANDR_SCRIPT_NAME=${XRANDR_SCRIPT_NAME:-bbk1.sh}
+XRANDR_SCRIPT_NAME=${XRANDR_SCRIPT_NAME:-hdmi_toggle.sh}
 XRANDR_HDMI_SCREEN_NAME=${XRANDR_HDMI_SCREEN_NAME:-HDMI1}
+XRANDR_DISABLE_OTHER=${XRANDR_DISABLE_OTHER:-0}
+MAIN_DEVICE=${UDEV_MAIN_DEVICE:-LVDS}
 [ -z "$UDEV_DEVICE" ] &&
     UDEV_DEVICE=$(basename $(dirname $(dirname /sys/class/drm/card*/*HDMI*/status)))
+[ -z "$UDEV_MAIN_DEVICE" ] &&
+    UDEV_MAIN_DEVICE=$(basename $(dirname /sys/class/drm/card*/*${MAIN_DEVICE}*/status)|sed 's/card\([0-9]*\)-\([A-Z][A-Z]*\)-[^0-9]*\([0-9]*\)/\2-\1-\3/')
+[ -z "$HDMI_DEVICE_NAME" ] &&
+    HDMI_DEVICE_NAME=$(basename $(dirname /sys/class/drm/card*/*HDMI*/status)|sed 's/card\([0-9]*\)-\([A-Z][A-Z]*\)-[^0-9]*\([0-9]*\)/\2-\1-\3/')
+[ -z "$HDMI_DEVICE_MODE" ] &&
+    HDMI_DEVICE_MODE=$(cat /sys/class/drm/card*/*HDMI*/modes|head -1)
+[ -z "$MAIN_DEVICE_MODE" ] &&
+    MAIN_DEVICE_MODE=$(cat /sys/class/drm/card*/*${MAIN_DEVICE}*/modes|head -1)
+[ -z "$DEVICES" ] &&
+    DEVICES=$(dirname /sys/class/drm/card*/*/status|xargs -n 1 basename|sed 's/card\([0-9]*\)-\([A-Z][A-Z]*\)-[^0-9]*\([0-9]*\)/\2-\1-\3/')
+
+function install_xrandr_config {
+    if [ 0 -eq "$XRANDR_DISABLE_OTHER" ]; then
+        local xrandr_device_status=' '
+    else
+        local xrandr_device_status=" --output ${UDEV_MAIN_DEVICE} --off"
+    fi
+    [ -z "$HDMI_DEVICE_MODE" ] &&
+        HDMI_DEVICE_MODE=$MAIN_DEVICE_MODE
+                # HDMI offset
+                #--pos 1600x0 \
+    local xrandr_configs_dir=/home/$X_USER/.screenlayout
+
+    mkdir -p $xrandr_configs_dir
+cat > $xrandr_configs_dir/hdmi_toggle.sh <<- EOF
+#!/bin/sh
+case \$1 in
+    disable )
+        xrandr \
+            --output ${UDEV_MAIN_DEVICE} \
+                --mode ${MAIN_DEVICE_MODE} \
+                --pos 0x0 \
+                --rotate normal \
+            --output ${HDMI_DEVICE_NAME} --off \
+        ;;
+    * )
+        xrandr \
+            --output ${HDMI_DEVICE_NAME} \
+                --mode ${HDMI_DEVICE_MODE} \
+                --rotate normal \
+            ${xrandr_device_status}
+
+        setvesablank off
+        xset s off
+        xset -dpms
+        xset s noblank
+        ;;
+esac
+EOF
+    chmod +x $xrandr_configs_dir/hdmi_toggle.sh
+    chown $X_USER: -R $xrandr_configs_dir
+}
+
 
 function install_udev_rule {
 #KERNEL=="card0", SUBSYSTEM=="drm", ACTION=="change", RUN+="/usr/local/bin/hdmi_toggle"
@@ -48,14 +103,36 @@ function uninstall_default_variables {
 sudo rm /etc/default/hdmi_toggle
 }
 
+
+# grab the display and xauthority cookie
+export DISPLAY=$(w -hs |awk '/\ :[0-9]+\ / {print $3}')
+X_USER=$(w -hs |awk '/\ :[0-9]+\ / {print $1}')
+## as root
+#export DISPLAY=$(w -hs | awk -v vt=tty$(fgconsole) '$0 ~ vt {print $3}')
+#X_USER=$(w -hs | awk -v vt=tty$(fgconsole) '$0 ~ vt {print $1}')
+export XAUTHORITY=/home/$X_USER/.Xauthority
+USER_ID=$(id -u "$X_USER")
+export PULSE_SERVER="unix:/run/user/"$USER_ID"/pulse/native"
+HDMI_STATUS=$(</sys/class/drm/card*/*HDMI*/status)
+
 case "$ACTION" in
+    -h|--help)
+        echo "env XRANDR_DISABLE_OTHER=0 $0 install"
+        echo "env XRANDR_DISABLE_OTHER=0 $0 install-xrandr-config"
+        exit 0
+        ;;
     install)
         sudo cp $0 /usr/local/bin/hdmi_toggle
         install_udev_rule
         install_systemd_unit
         install_default_variables
+        install_xrandr_config
         sudo udevadm control --reload-rules
         sudo systemctl daemon-reload
+        exit 0
+        ;;
+    install-xrandr-config)
+        install_xrandr_config
         exit 0
         ;;
     uninstall)
@@ -69,17 +146,6 @@ case "$ACTION" in
         ;;
     *);;
 esac
-
-# grab the display and xauthority cookie
-export DISPLAY=$(w -hs |awk '/\ :[0-9]+\ / {print $3}')
-X_USER=$(w -hs |awk '/\ :[0-9]+\ / {print $1}')
-## as root
-#export DISPLAY=$(w -hs | awk -v vt=tty$(fgconsole) '$0 ~ vt {print $3}')
-#X_USER=$(w -hs | awk -v vt=tty$(fgconsole) '$0 ~ vt {print $1}')
-export XAUTHORITY=/home/$X_USER/.Xauthority
-USER_ID=$(id -u "$X_USER")
-export PULSE_SERVER="unix:/run/user/"$USER_ID"/pulse/native"
-HDMI_STATUS=$(</sys/class/drm/card*/*HDMI*/status)
 
 if [[ $HDMI_STATUS == connected ]]; then
     sudo -u "$X_USER" \
