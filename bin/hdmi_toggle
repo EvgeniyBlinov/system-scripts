@@ -1,12 +1,15 @@
 #!/usr/bin/env bash
 
 ACTION="$1"
-XRANDR_SCRIPT_NAME='bbk1.sh'
+XRANDR_SCRIPT_NAME=${XRANDR_SCRIPT_NAME:-bbk1.sh}
+XRANDR_HDMI_SCREEN_NAME=${XRANDR_HDMI_SCREEN_NAME:-HDMI1}
+[ -z "$UDEV_DEVICE" ] &&
+    UDEV_DEVICE=$(basename $(dirname $(dirname /sys/class/drm/card*/*HDMI*/status)))
 
 function install_udev_rule {
 #KERNEL=="card0", SUBSYSTEM=="drm", ACTION=="change", RUN+="/usr/local/bin/hdmi_toggle"
-sudo cat > /etc/udev/rules.d/99-hdmi_sound.rules <<- 'EOF'
-KERNEL=="card0", SUBSYSTEM=="drm", ACTION=="change", RUN+="/bin/systemctl start hdmi_toggle.service"
+sudo -E cat > /etc/udev/rules.d/99-hdmi_sound.rules <<- EOF
+KERNEL=="${UDEV_DEVICE}", SUBSYSTEM=="drm", ACTION=="change", RUN+="/bin/systemctl start hdmi_toggle.service"
 EOF
 }
 
@@ -20,6 +23,7 @@ sudo cat > /etc/systemd/system/hdmi_toggle.service <<- 'EOF'
 Description=hdmi hotplug
 
 [Service]
+EnvironmentFile=-/etc/default/hdmi_toggle
 Type=simple
 RemainAfterExit=no
 ExecStart=/usr/local/bin/hdmi_toggle
@@ -33,11 +37,23 @@ function uninstall_systemd_unit {
 sudo rm /etc/systemd/system/hdmi_toggle.service
 }
 
+function install_default_variables {
+sudo -E cat > /etc/default/hdmi_toggle <<- EOF
+XRANDR_SCRIPT_NAME="${XRANDR_SCRIPT_NAME}"
+XRANDR_HDMI_SCREEN_NAME="${XRANDR_HDMI_SCREEN_NAME}"
+EOF
+}
+
+function uninstall_default_variables {
+sudo rm /etc/default/hdmi_toggle
+}
+
 case "$ACTION" in
     install)
         sudo cp $0 /usr/local/bin/hdmi_toggle
         install_udev_rule
         install_systemd_unit
+        install_default_variables
         sudo udevadm control --reload-rules
         sudo systemctl daemon-reload
         exit 0
@@ -46,6 +62,7 @@ case "$ACTION" in
         sudo rm /usr/local/bin/hdmi_toggle
         uninstall_udev_rule
         uninstall_systemd_unit
+        uninstall_default_variables
         sudo udevadm control --reload-rules
         sudo systemctl daemon-reload
         exit 0
@@ -54,22 +71,22 @@ case "$ACTION" in
 esac
 
 # grab the display and xauthority cookie
-export DISPLAY=$(w -hs |awk '/\s:[0-9]+\s/ {print $3}')
-X_USER=$(w -hs |awk '/\s:[0-9]+\s/ {print $1}')
+export DISPLAY=$(w -hs |awk '/\ :[0-9]+\ / {print $3}')
+X_USER=$(w -hs |awk '/\ :[0-9]+\ / {print $1}')
 ## as root
 #export DISPLAY=$(w -hs | awk -v vt=tty$(fgconsole) '$0 ~ vt {print $3}')
 #X_USER=$(w -hs | awk -v vt=tty$(fgconsole) '$0 ~ vt {print $1}')
 export XAUTHORITY=/home/$X_USER/.Xauthority
 USER_ID=$(id -u "$X_USER")
 export PULSE_SERVER="unix:/run/user/"$USER_ID"/pulse/native"
-HDMI_STATUS=$(</sys/class/drm/card0/*HDMI*/status)
+HDMI_STATUS=$(</sys/class/drm/card*/*HDMI*/status)
 
 if [[ $HDMI_STATUS == connected ]]; then
     sudo -u "$X_USER" \
         pactl --server "$PULSE_SERVER" set-card-profile 0 output:hdmi-stereo+input:analog-stereo
-    /bin/su $X_USER -c "/home/$X_USER/.screenlayout/$XRANDR_SCRIPT_NAME"
+    /bin/su $X_USER -c "/home/$X_USER/.screenlayout/$XRANDR_SCRIPT_NAME enable"
 else
     sudo -u "$X_USER" \
         pactl --server "$PULSE_SERVER" set-card-profile 0 output:analog-stereo+input:analog-stereo
-    /bin/su $X_USER -c '/usr/bin/xrandr --output HDMI1 --off'
+    /bin/su $X_USER -c "/home/$X_USER/.screenlayout/$XRANDR_SCRIPT_NAME disable"
 fi
