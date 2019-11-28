@@ -3,14 +3,15 @@
 ACTION="$1"
 XRANDR_SCRIPT_NAME=${XRANDR_SCRIPT_NAME:-hdmi_toggle.sh}
 XRANDR_HDMI_SCREEN_NAME=${XRANDR_HDMI_SCREEN_NAME:-HDMI1}
+HDMI_CARD_DEVICE_NAME=${HDMI_CARD_DEVICE_NAME:-HDMI}
 XRANDR_DISABLE_OTHER=${XRANDR_DISABLE_OTHER:-0}
 MAIN_DEVICE=${UDEV_MAIN_DEVICE:-LVDS}
 [ -z "$UDEV_DEVICE" ] &&
-    UDEV_DEVICE=$(basename $(dirname $(dirname /sys/class/drm/card*/*HDMI*/status)))
+    UDEV_DEVICE=$(basename $(dirname $(dirname /sys/class/drm/card*/*${HDMI_CARD_DEVICE_NAME}*/status)))
 [ -z "$UDEV_MAIN_DEVICE" ] &&
     UDEV_MAIN_DEVICE=$(basename $(dirname /sys/class/drm/card*/*${MAIN_DEVICE}*/status)|sed 's/card\([0-9]*\)-\([A-Z][A-Z]*\)-[^0-9]*\([0-9]*\)/\2-\1-\3/')
 [ -z "$HDMI_DEVICE_NAME" ] &&
-    HDMI_DEVICE_NAME=$(basename $(dirname /sys/class/drm/card*/*HDMI*/status)|sed 's/card\([0-9]*\)-\([A-Z][A-Z]*\)-[^0-9]*\([0-9]*\)/\2-\1-\3/')
+    HDMI_DEVICE_NAME=$(basename $(dirname /sys/class/drm/card*/*${HDMI_CARD_DEVICE_NAME}*/status)|sed 's/card\([0-9]*\)-\([A-Z][A-Z]*\)-[^0-9]*\([0-9]*\)/\2-\1-\3/')
 [ -z "$HDMI_DEVICE_MODE" ] &&
     HDMI_DEVICE_MODE=$(cat /sys/class/drm/card*/*HDMI*/modes|head -1)
 [ -z "$MAIN_DEVICE_MODE" ] &&
@@ -63,7 +64,7 @@ EOF
 
 function install_udev_rule {
 #KERNEL=="card0", SUBSYSTEM=="drm", ACTION=="change", RUN+="/usr/local/bin/hdmi_toggle"
-sudo -E cat > /etc/udev/rules.d/99-hdmi_sound.rules <<- EOF
+cat <<- EOF | sudo -E tee /etc/udev/rules.d/99-hdmi_sound.rules
 KERNEL=="${UDEV_DEVICE}", SUBSYSTEM=="drm", ACTION=="change", RUN+="/bin/systemctl start hdmi_toggle.service"
 EOF
 }
@@ -73,7 +74,7 @@ sudo rm /etc/udev/rules.d/99-hdmi_sound.rules
 }
 
 function install_systemd_unit {
-sudo cat > /etc/systemd/system/hdmi_toggle.service <<- 'EOF'
+cat  <<- 'EOF' | sudo -E tee /etc/systemd/system/hdmi_toggle.service
 [Unit]
 Description=hdmi hotplug
 
@@ -93,7 +94,7 @@ sudo rm /etc/systemd/system/hdmi_toggle.service
 }
 
 function install_default_variables {
-sudo -E cat > /etc/default/hdmi_toggle <<- EOF
+cat <<- EOF | sudo -E tee /etc/default/hdmi_toggle
 XRANDR_SCRIPT_NAME="${XRANDR_SCRIPT_NAME}"
 XRANDR_HDMI_SCREEN_NAME="${XRANDR_HDMI_SCREEN_NAME}"
 EOF
@@ -113,13 +114,17 @@ X_USER=$(w -hs |awk '/\ :[0-9]+\ / {print $1}')
 export XAUTHORITY=/home/$X_USER/.Xauthority
 USER_ID=$(id -u "$X_USER")
 export PULSE_SERVER="unix:/run/user/"$USER_ID"/pulse/native"
-HDMI_STATUS=$(</sys/class/drm/card*/*HDMI*/status)
+HDMI_STATUS=$(</sys/class/drm/card*/*${HDMI_CARD_DEVICE_NAME}*/status)
 
 case "$ACTION" in
     -h|--help)
         echo "env XRANDR_DISABLE_OTHER=0 $0 install"
         echo "env XRANDR_DISABLE_OTHER=0 $0 install-xrandr-config"
         exit 0
+        ;;
+    status)
+        #env $(sed ':a;N;$!ba;s/\n/ /g' /etc/default/hdmi_toggle) ./hdmi_toggle status
+        echo $HDMI_STATUS
         ;;
     install)
         sudo cp $0 /usr/local/bin/hdmi_toggle
