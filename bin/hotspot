@@ -168,10 +168,10 @@ EOF
     # @TODO use all rules
     if [ -x '/usr/scripts/firewall' ]; then
         /usr/scripts/firewall -i "${HOTSPOT_INET}" -l "${HOTSPOT_ILAN}" -a 'all_accept forward'
-        iptables -t nat -A POSTROUTING --src ${HOTSPOT_ILAN_IP%.*}.0/24 -o $(ip route get 1 |awk '{printf $5}') -j MASQUERADE 
+        iptables -t nat -A POSTROUTING --src ${HOTSPOT_ILAN_IP%.*}.0/24 -o ${HOTSPOT_INET} -j MASQUERADE 
     else
         echo "1" > /proc/sys/net/ipv4/ip_forward
-        iptables -t nat -A POSTROUTING --src ${HOTSPOT_ILAN_IP%.*}.0/24 -o $(ip route get 1 |awk '{printf $5}') -j MASQUERADE 
+        iptables -t nat -A POSTROUTING --src ${HOTSPOT_ILAN_IP%.*}.0/24 -o ${HOTSPOT_INET} -j MASQUERADE 
         iptables -t nat -A POSTROUTING -o "$HOTSPOT_INET" -j MASQUERADE
         iptables -A FORWARD -m conntrack --ctstate RELATED,ESTABLISHED -j ACCEPT
         iptables -A FORWARD -i "$HOTSPOT_ILAN" -o "$HOTSPOT_INET" -j ACCEPT
