@@ -129,14 +129,14 @@ dhcp-range=${HOTSPOT_ILAN_IP%.*}.2,${HOTSPOT_ILAN_IP%.*}.50,12h
 dhcp-option=3,${HOTSPOT_ILAN_IP}
 EOF
     ifconfig "$HOTSPOT_ILAN" "$HOTSPOT_ILAN_IP" up &&
-    systemctl start dnsmasq &&
+    systemctl restart dnsmasq &&
     echo "Run hostapd..." &&
     echo "Make /etc/hostapd/hostapd.conf"
 cat >  /etc/hostapd/hostapd.conf <<EOF
 #########################  SIMPLE  ######################################
 interface=${HOTSPOT_ILAN}
 driver=nl80211
-channel=3
+channel=1
 ##hw_mode=b
 hw_mode=g
 wpa=2
@@ -152,7 +152,7 @@ beacon_int=50
 disassoc_low_ack=1
 
 ## unknown
-#ht_capab=[HT40+][HT40-][SHORT-GI-40][RX-STBC1]
+ht_capab=[HT40+][HT40-][SHORT-GI-40][RX-STBC1]
 ieee80211d=1
 ieee80211n=1
 require_ht=0
@@ -162,6 +162,16 @@ ctrl_interface_group=0
 ignore_broadcast_ssid=0
 macaddr_acl=0
 EOF
+
+#cat > /etc/dhcpd.conf <<EOF
+#ddns-update-style none;
+#subnet 10.10.0.0 netmask 255.255.255.0 {
+        #range 10.10.0.2 10.10.0.16;
+        #option domain-name-servers 8.8.4.4, 208.67.222.222;
+        #option routers ${HOTSPOT_ILAN_IP};
+#}
+#EOF
+
     hostapd -dd -B /etc/hostapd/hostapd.conf &&
     (
     echo "Run firewall..."
@@ -171,6 +181,8 @@ EOF
         iptables -t nat -A POSTROUTING --src ${HOTSPOT_ILAN_IP%.*}.0/24 -o ${HOTSPOT_INET} -j MASQUERADE 
     else
         echo "1" > /proc/sys/net/ipv4/ip_forward
+        iptables --table nat --delete-chain
+        iptables --table nat --flush
         iptables -t nat -A POSTROUTING --src ${HOTSPOT_ILAN_IP%.*}.0/24 -o ${HOTSPOT_INET} -j MASQUERADE 
         iptables -t nat -A POSTROUTING -o "$HOTSPOT_INET" -j MASQUERADE
         iptables -A FORWARD -m conntrack --ctstate RELATED,ESTABLISHED -j ACCEPT
