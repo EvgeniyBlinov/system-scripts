@@ -17,6 +17,8 @@
 # PRIVATE
 [ -z "$HOTSPOT_WIFI_SSID" ]          && export HOTSPOT_WIFI_SSID='HOTSPOT'
 [ -z "$HOTSPOT_WIFI_PASSWORD" ]      && export HOTSPOT_WIFI_PASSWORD='SgX1ipurB3'
+[ -z "$HOTSPOT_FIREWALL_SCRIPT" ]      && export HOTSPOT_FIREWALL_SCRIPT='/usr/local/bin/firewall'
+
 ########################################################################
 
 function usage {
@@ -34,6 +36,10 @@ depends:
 EOF
     [ -z "$1" ] && return 100 ||
     exit "$1"
+}
+
+function log {
+    echo "${0##*/}: $1"
 }
 ########################################################################
 while getopts ":?hrw:i:s:p:" opt; do
@@ -59,15 +65,16 @@ case "$*" in
     *up*)     export HOTSPOT_ACTION='up'     ;;
     *down*)   export HOTSPOT_ACTION='down'   ;;
     *status*) export HOTSPOT_ACTION='status' ;;
+    *firewall*) export HOTSPOT_ACTION='firewall' ;;
 esac
 
 ## varibles validation
 if [ -z "$HOTSPOT_INET" ]; then
-    echo "Error: input device ${HOTSPOT_INET} is empty"
+    log "Error: input device ${HOTSPOT_INET} is empty"
     usage 1
 fi
 if [ "$HOTSPOT_INET" == "$HOTSPOT_ILAN" ]; then
-    echo "Error: input device ${HOTSPOT_INET} == wlan device ${HOTSPOT_ILAN}"
+    log "Error: input device ${HOTSPOT_INET} == wlan device ${HOTSPOT_ILAN}"
     usage 2
 fi
 
@@ -84,14 +91,14 @@ fi
 ########################################################################
 
 if [ ! -h /dev/random.old ]; then
-    echo "Move random"
+    log "Move random"
 	mv /dev/random /dev/random.old
 	ln -s /dev/urandom /dev/random
 fi
 
 
 if [ 1 == "$HOTSPOT_RESET_WIFI_MODULES" ]; then
-    echo "Reset ${HOTSPOT_WIFI_DRIVER} kernel modules"
+    log "Reset ${HOTSPOT_WIFI_DRIVER} kernel modules"
     rmmod ${HOTSPOT_WIFI_DRIVER}
     sleep 2
     modprobe ${HOTSPOT_WIFI_DRIVER}
@@ -102,11 +109,15 @@ fi
 
 #configure
 function downWlan {
-    echo "Down ${HOTSPOT_ILAN}"
+    log "Down ${HOTSPOT_ILAN}"
     #ifconfig $HOTSPOT_INET down &&
     ifconfig $HOTSPOT_ILAN down &&
     systemctl stop dnsmasq &&
+    systemctl stop hostapd 2>/dev/null ;
     killall hostapd 2>/dev/null
+    if [ -x ${HOTSPOT_FIREWALL_SCRIPT} ]; then
+        ${HOTSPOT_FIREWALL_SCRIPT} -i "${HOTSPOT_INET}" -l "${HOTSPOT_ILAN}" -a 'all_accept'
+    fi
     #if [ -x '/usr/scripts/firewall' ]; then
         #/usr/scripts/firewall -i "${HOTSPOT_INET}" -l "${HOTSPOT_ILAN}" -a 'all_accept'
     #else
@@ -114,6 +125,38 @@ function downWlan {
         #iptables -t nat -A POSTROUTING -o "$HOTSPOT_INET" -j MASQUERADE
         #iptables -A FORWARD -m conntrack --ctstate RELATED,ESTABLISHED -j ACCEPT
         #iptables -A FORWARD -i "$HOTSPOT_ILAN" -o "$HOTSPOT_INET" -j ACCEPT
+    #fi
+}
+
+function firewall_up {
+    log "Run firewall..."
+    # @TODO use all rules
+    #if [ -x ${HOTSPOT_FIREWALL_SCRIPT} ]; then
+        #log "Firewall script found at ${HOTSPOT_FIREWALL_SCRIPT}"
+        #${HOTSPOT_FIREWALL_SCRIPT} -i "${HOTSPOT_INET}" -l "${HOTSPOT_ILAN}" -a 'all_accept forward'
+        #iptables -t nat -A POSTROUTING --src ${HOTSPOT_ILAN_IP%.*}.0/24 -o ${HOTSPOT_INET} -j MASQUERADE 
+    #else
+        echo "1" > /proc/sys/net/ipv4/ip_forward
+        ## disable firewall
+        #iptables -P INPUT ACCEPT
+        #iptables -F
+        ## drop all package dropping in beginning
+        iptables -D INPUT -j DROP
+        iptables --table nat --delete-chain
+        iptables --table nat --flush
+        iptables -t nat -A POSTROUTING --src ${HOTSPOT_ILAN_IP%.*}.0/24 -o ${HOTSPOT_INET} -j MASQUERADE 
+        iptables -t nat -A POSTROUTING -o "$HOTSPOT_INET" -j MASQUERADE
+        iptables -A FORWARD -m conntrack --ctstate RELATED,ESTABLISHED -j ACCEPT
+        iptables -A FORWARD -i "$HOTSPOT_ILAN" -o "$HOTSPOT_INET" -j ACCEPT
+        ### For VPN
+        iptables -t nat -A POSTROUTING -o tun0 -j MASQUERADE
+
+        ## accept dnsmasq connections
+        iptables -A INPUT -p tcp -m multiport -i wlan0 --dports 53 -j ACCEPT
+        iptables -A INPUT -p udp -m multiport -i wlan0 --dports 53 -j ACCEPT
+        iptables -A INPUT -p udp -m multiport -i wlan0 --dports 67 -j ACCEPT
+        ## add all package dropping in beginning
+        iptables -A INPUT -j DROP
     #fi
 }
 
@@ -174,22 +217,7 @@ EOF
 
     hostapd -dd -B /etc/hostapd/hostapd.conf &&
     (
-    echo "Run firewall..."
-    # @TODO use all rules
-    if [ -x '/usr/scripts/firewall' ]; then
-        /usr/scripts/firewall -i "${HOTSPOT_INET}" -l "${HOTSPOT_ILAN}" -a 'all_accept forward'
-        iptables -t nat -A POSTROUTING --src ${HOTSPOT_ILAN_IP%.*}.0/24 -o ${HOTSPOT_INET} -j MASQUERADE 
-    else
-        echo "1" > /proc/sys/net/ipv4/ip_forward
-        iptables --table nat --delete-chain
-        iptables --table nat --flush
-        iptables -t nat -A POSTROUTING --src ${HOTSPOT_ILAN_IP%.*}.0/24 -o ${HOTSPOT_INET} -j MASQUERADE 
-        iptables -t nat -A POSTROUTING -o "$HOTSPOT_INET" -j MASQUERADE
-        iptables -A FORWARD -m conntrack --ctstate RELATED,ESTABLISHED -j ACCEPT
-        iptables -A FORWARD -i "$HOTSPOT_ILAN" -o "$HOTSPOT_INET" -j ACCEPT
-        ### For VPN
-        iptables -t nat -A POSTROUTING -o tun0 -j MASQUERADE
-    fi
+        firewall_up
     )
 }
 
@@ -227,6 +255,7 @@ function hotspot_status {
 
 case "$HOTSPOT_ACTION" in
     up) upWlan ;;
+    firewall) firewall_up ;;
     down) downWlan ;;
     *)
         usage
